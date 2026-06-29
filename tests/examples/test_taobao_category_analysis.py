@@ -60,6 +60,27 @@ def test_analyze_category_dedupes_items_and_builds_metrics(monkeypatch):
     assert result["metrics"]["price"]["median"] == 194.0
     assert result["metrics"]["sales"]["median"] == 6500
     assert result["metrics"]["shops"]["unique_shop_count"] == 2
+    # New metrics assertions
+    assert "sales_distribution" in result["metrics"]
+    assert "top_item_contribution" in result["metrics"]
+    assert "gmv_estimate" in result["metrics"]
+    assert "category_heat" in result["metrics"]
+    assert "top_products" in result["metrics"]
+    assert "rank_sales_distribution" in result["metrics"]
+    assert len(result["metrics"]["sales_distribution"]["bands"]) == 5
+    assert result["metrics"]["gmv_estimate"]["total_gmv"] > 0
+    assert 0 <= result["metrics"]["category_heat"]["score"] <= 100
+    assert result["metrics"]["category_heat"]["level"] in ("高", "中高", "中", "中低", "低")
+    assert len(result["metrics"]["top_products"]) == 2
+    # Price bands now include sales data
+    bands = result["metrics"]["price"]["bands"]
+    assert all("sales_count" in b and "sales_sum" in b for b in bands)
+    # Title terms now include demand_type
+    terms = result["metrics"]["title_terms"]
+    assert all("demand_type" in t and "percentage" in t for t in terms)
+    # Shop top_shops now include sales_sum
+    top_shops = result["metrics"]["shops"]["top_shops"]
+    assert all("sales_sum" in s and "avg_price" in s for s in top_shops)
     assert "market_overview" in result["summary"]
     assert result["report"]["market_snapshot"]["title"] == "市场样本概况"
     assert result["report"]["price_structure"]["evidence"]
@@ -125,7 +146,7 @@ def test_frontend_index_is_served():
     response = client.get("/")
 
     assert response.status_code == 200
-    assert "AI 电商工具" in response.text
+    assert "类目洞察" in response.text
 
 
 def test_llm_failure_falls_back_without_logging_secret(monkeypatch, caplog):

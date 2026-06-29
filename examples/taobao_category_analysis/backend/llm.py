@@ -135,9 +135,19 @@ def generate_ai_summary(
 
 
 def _build_messages(keyword: str, metrics: dict[str, Any], sample_items: list[dict[str, Any]]) -> list[dict[str, str]]:
+    prompt_metrics = {
+        "price": metrics.get("price"),
+        "sales": metrics.get("sales"),
+        "sales_distribution": metrics.get("sales_distribution"),
+        "top_item_contribution": metrics.get("top_item_contribution"),
+        "gmv_estimate": metrics.get("gmv_estimate"),
+        "category_heat": metrics.get("category_heat"),
+        "shops": metrics.get("shops"),
+        "title_terms": metrics.get("title_terms"),
+    }
     payload = {
         "keyword": keyword,
-        "metrics": metrics,
+        "metrics": prompt_metrics,
         "sample_items": sample_items,
     }
     return [

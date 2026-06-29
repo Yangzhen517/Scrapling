@@ -11,6 +11,53 @@ from .llm import generate_ai_summary
 from .logging_utils import log_event
 
 
+_DEMAND_TYPE_MAP = {
+    "功能属性": [
+        "防晒", "upf", "防紫外线", "冰丝", "透气", "速干", "轻薄", "凉感", "抗uv",
+        "保湿", "美白", "控油", "补水", "遮光", "遮光布", "隔热",
+        "降噪", "防水", "防滑", "耐磨", "保暖", "加厚", "加绒",
+        "吸汗", "弹力", "抗皱", "免烫", "防静电",
+        "upf50", "冰丝面料", "冰感", "凉感面料",
+    ],
+    "使用场景": [
+        "通勤", "运动", "旅行", "户外", "休闲", "上班", "日常", "居家",
+        "约会", "度假", "出差", "办公", "校园", "逛街", "跑步", "健身",
+        "骑行", "钓鱼", "露营", "开车", "学车",
+    ],
+    "人群定位": [
+        "男士", "女士", "儿童", "宝宝", "孕妇", "中老年", "青少年",
+        "学生", "男女", "情侣", "女童", "男童", "婴儿", "幼儿",
+        "男生", "女生", "大童", "妈妈",
+    ],
+    "材质工艺": [
+        "纯棉", "棉麻", "亚麻", "真丝", "蕾丝", "针织", "雪纺", "牛仔",
+        "莫代尔", "竹纤维", "冰丝", "网纱", "尼龙", "涤纶", "氨纶",
+        "丝绸", "羊毛", "羊绒", "羽绒", "棉", "麻", "丝", "聚酯纤维",
+    ],
+    "品牌风格": [
+        "韩版", "日系", "ins", "简约", "复古", "潮牌", "百搭",
+        "文艺", "法式", "小香风", "学院风", "港风", "国风", "中国风",
+        "时尚", "潮流", "气质", "高级感",
+    ],
+    "季节时间": [
+        "夏季", "春夏", "夏款", "新款", "春季", "秋季", "冬季",
+    ],
+    "版型款式": [
+        "宽松", "修身", "显瘦", "高腰", "长款", "短款", "中长款",
+        "a字", "直筒", "阔腿", "半身", "连衣裙", "短袖", "长袖",
+    ],
+    "颜色外观": [
+        "白色", "黑色", "蓝色", "粉色", "绿色", "红色", "灰色",
+        "黄色", "紫色", "彩色", "纯色", "条纹", "格子", "印花",
+        "亮色", "深色",
+    ],
+    "卖点特性": [
+        "薄款", "凉爽", "清爽", "舒适", "柔软", "亲肤", "轻便",
+        "大容量", "多功能", "便携", "可折叠", "收纳",
+    ],
+}
+
+
 _COMMON_TITLE_TERMS = {
     "淘宝",
     "天猫",
@@ -68,10 +115,16 @@ def analyze_category(payload: dict[str, Any], request_id: str = "", analysis_id:
     metrics = {
         "price": _price_metrics(normalized_items),
         "sales": _sales_metrics(normalized_items),
+        "sales_distribution": _sales_distribution_metrics(normalized_items),
+        "top_item_contribution": _top_item_contribution_metrics(normalized_items),
+        "gmv_estimate": _gmv_estimate(normalized_items),
         "shops": _shop_metrics(normalized_items),
         "title_terms": _title_term_metrics(normalized_items),
         "data_quality": _data_quality_metrics(normalized_items),
+        "top_products": _top_products(normalized_items),
+        "rank_sales_distribution": _rank_sales_distribution(normalized_items),
     }
+    metrics["category_heat"] = _category_heat_score(normalized_items, metrics)
     log_event(
         "analysis.metrics_finished",
         request_id=request_id,
@@ -328,11 +381,15 @@ def _price_metrics(items: list[NormalizedItem]) -> dict[str, Any]:
         "min": round(prices[0], 2),
         "max": round(prices[-1], 2),
         "median": round(float(median(prices)), 2),
-        "bands": _build_price_bands(prices),
+        "bands": _build_price_bands(items),
     }
 
 
-def _build_price_bands(prices: list[float]) -> list[dict[str, Any]]:
+def _build_price_bands(items: list[NormalizedItem]) -> list[dict[str, Any]]:
+    prices = sorted(item.price_value for item in items if item.price_value is not None)
+    if not prices:
+        return []
+
     max_price = max(prices)
     if max_price <= 50:
         edges = [0, 10, 20, 30, 50]
@@ -343,13 +400,36 @@ def _build_price_bands(prices: list[float]) -> list[dict[str, Any]]:
     else:
         edges = [0, 200, 500, 1000, 3000, max_price]
 
+    total_sales = sum(item.sales_value for item in items if item.sales_value is not None) or 1
     bands: list[dict[str, Any]] = []
     for lower, upper in zip(edges, edges[1:]):
-        count = sum(1 for price in prices if lower <= price < upper)
-        bands.append({"label": f"{lower:g}-{upper:g}元", "min": lower, "max": upper, "count": count})
-    overflow = sum(1 for price in prices if price >= edges[-1])
+        band_items = [item for item in items if item.price_value is not None and lower <= item.price_value < upper]
+        count = len(band_items)
+        sales_count = sum(1 for item in band_items if item.sales_value is not None)
+        sales_sum = sum(item.sales_value for item in band_items if item.sales_value is not None)
+        bands.append({
+            "label": f"{lower:g}-{upper:g}元",
+            "min": lower,
+            "max": upper,
+            "count": count,
+            "sales_count": sales_count,
+            "sales_sum": sales_sum,
+            "sales_percentage": round(sales_sum / total_sales * 100, 1) if total_sales else 0,
+        })
+    overflow_items = [item for item in items if item.price_value is not None and item.price_value >= edges[-1]]
+    overflow = len(overflow_items)
     if overflow:
-        bands.append({"label": f"{edges[-1]:g}元以上", "min": edges[-1], "max": None, "count": overflow})
+        sales_count = sum(1 for item in overflow_items if item.sales_value is not None)
+        sales_sum = sum(item.sales_value for item in overflow_items if item.sales_value is not None)
+        bands.append({
+            "label": f"{edges[-1]:g}元以上",
+            "min": edges[-1],
+            "max": None,
+            "count": overflow,
+            "sales_count": sales_count,
+            "sales_sum": sales_sum,
+            "sales_percentage": round(sales_sum / total_sales * 100, 1) if total_sales else 0,
+        })
     return bands
 
 
@@ -374,13 +454,36 @@ def _sales_metrics(items: list[NormalizedItem]) -> dict[str, Any]:
 
 
 def _shop_metrics(items: list[NormalizedItem]) -> dict[str, Any]:
-    shop_counter = Counter(item.shop_name for item in items if item.shop_name)
-    total = sum(shop_counter.values())
-    top_shops = _counter_to_list(shop_counter, 10)
+    shop_items: dict[str, list[NormalizedItem]] = {}
+    for item in items:
+        if item.shop_name:
+            shop_items.setdefault(item.shop_name, []).append(item)
+
+    total = sum(len(v) for v in shop_items.values())
+    total_sales = sum(item.sales_value for item in items if item.sales_value is not None) or 1
+
+    shop_stats: list[dict[str, Any]] = []
+    for shop_name, shop_items_list in shop_items.items():
+        sales_sum = sum(item.sales_value for item in shop_items_list if item.sales_value is not None)
+        price_values = [item.price_value for item in shop_items_list if item.price_value is not None]
+        avg_price = round(sum(price_values) / len(price_values), 2) if price_values else 0
+        shop_stats.append({
+            "term": shop_name,
+            "count": len(shop_items_list),
+            "sales_sum": sales_sum,
+            "avg_price": avg_price,
+            "item_count": len(shop_items_list),
+        })
+
+    top_shops = sorted(shop_stats, key=lambda x: x["count"], reverse=True)[:10]
     top5_count = sum(shop["count"] for shop in top_shops[:5])
+
+    for shop in top_shops:
+        shop["market_share"] = round(shop["sales_sum"] / total_sales * 100, 1) if total_sales else 0
+
     return {
-        "unique_shop_count": len(shop_counter),
-        "duplicate_shop_count": sum(1 for count in shop_counter.values() if count > 1),
+        "unique_shop_count": len(shop_items),
+        "duplicate_shop_count": sum(1 for items_list in shop_items.values() if len(items_list) > 1),
         "top5_concentration_ratio": round(top5_count / total, 4) if total else 0,
         "top_shops": top_shops,
     }
@@ -388,9 +491,31 @@ def _shop_metrics(items: list[NormalizedItem]) -> dict[str, Any]:
 
 def _title_term_metrics(items: list[NormalizedItem]) -> list[dict[str, Any]]:
     counter: Counter[str] = Counter()
+    item_presence: Counter[str] = Counter()
     for item in items:
+        terms_in_item = set(_extract_title_terms(item.title))
         counter.update(_extract_title_terms(item.title))
-    return _counter_to_list(counter, 20)
+        item_presence.update(terms_in_item)
+    total = len(items) or 1
+    raw = counter.most_common(20)
+    return [
+        {
+            "term": term,
+            "count": count,
+            "percentage": round(item_presence[term] / total * 100, 1),
+            "demand_type": _classify_demand_type(term),
+        }
+        for term, count in raw
+    ]
+
+
+def _classify_demand_type(term: str) -> str:
+    term_lower = term.lower()
+    for demand_type, keywords in _DEMAND_TYPE_MAP.items():
+        for keyword in keywords:
+            if keyword in term_lower or term_lower in keyword:
+                return demand_type
+    return "其他"
 
 
 def _extract_title_terms(title: str) -> list[str]:
@@ -428,6 +553,197 @@ def _data_quality_metrics(items: list[NormalizedItem]) -> dict[str, Any]:
         "missing_sales_text": missing_sales,
         "missing_shop_name": missing_shop,
     }
+
+
+def _sales_distribution_metrics(items: list[NormalizedItem]) -> dict[str, Any]:
+    sales_items = [(item.sales_value, item) for item in items if item.sales_value is not None]
+    total_parsed = len(sales_items)
+    if not total_parsed:
+        return {
+            "bands": [
+                {"label": "10000以上", "count": 0, "percentage": 0},
+                {"label": "5000-10000", "count": 0, "percentage": 0},
+                {"label": "1000-5000", "count": 0, "percentage": 0},
+                {"label": "500-1000", "count": 0, "percentage": 0},
+                {"label": "500以下", "count": 0, "percentage": 0},
+            ],
+            "total_parsed": 0,
+        }
+
+    ranges = [
+        ("10000以上", 10000, float("inf")),
+        ("5000-10000", 5000, 10000),
+        ("1000-5000", 1000, 5000),
+        ("500-1000", 500, 1000),
+        ("500以下", 0, 500),
+    ]
+    bands = []
+    for label, low, high in ranges:
+        count = sum(1 for sv, _ in sales_items if low <= sv < high)
+        bands.append({"label": label, "count": count, "percentage": round(count / total_parsed * 100, 1)})
+    return {"bands": bands, "total_parsed": total_parsed}
+
+
+def _top_item_contribution_metrics(items: list[NormalizedItem]) -> dict[str, Any]:
+    sorted_items = sorted(
+        [item for item in items if item.sales_value is not None],
+        key=lambda x: x.sales_value,
+        reverse=True,
+    )
+    total_sales = sum(item.sales_value for item in sorted_items)
+    if not total_sales:
+        return {
+            "bands": [
+                {"label": "TOP 5", "sales_sum": 0, "percentage": 0},
+                {"label": "TOP 6-10", "sales_sum": 0, "percentage": 0},
+                {"label": "TOP 11-20", "sales_sum": 0, "percentage": 0},
+                {"label": "TOP 21-30", "sales_sum": 0, "percentage": 0},
+                {"label": "其他", "sales_sum": 0, "percentage": 0},
+            ],
+            "total_sales": 0,
+        }
+
+    tiers = [
+        ("TOP 5", 0, 5),
+        ("TOP 6-10", 5, 10),
+        ("TOP 11-20", 10, 20),
+        ("TOP 21-30", 20, 30),
+    ]
+    bands: list[dict[str, Any]] = []
+    accumulated = 0
+    for label, start, end in tiers:
+        tier_items = sorted_items[start:end]
+        sales_sum = sum(item.sales_value for item in tier_items)
+        accumulated += sales_sum
+        bands.append({"label": label, "sales_sum": sales_sum, "percentage": round(sales_sum / total_sales * 100, 1)})
+
+    other_sales = total_sales - accumulated
+    bands.append({"label": "其他", "sales_sum": other_sales, "percentage": round(other_sales / total_sales * 100, 1)})
+    return {"bands": bands, "total_sales": total_sales}
+
+
+def _gmv_estimate(items: list[NormalizedItem]) -> dict[str, Any]:
+    valid_items = [item for item in items if item.price_value is not None and item.sales_value is not None]
+    if not valid_items:
+        return {"total_gmv": 0, "item_count": 0, "avg_gmv": 0, "gmv_label": "暂无数据", "total_sales_estimate": 0}
+
+    total_gmv = sum(item.price_value * item.sales_value for item in valid_items)
+    total_sales = sum(item.sales_value for item in valid_items)
+    avg_gmv = total_gmv / len(valid_items)
+
+    if total_gmv >= 10000:
+        gmv_label = f"约 {total_gmv / 10000:.1f} 万元"
+    else:
+        gmv_label = f"约 {total_gmv:.0f} 元"
+
+    if total_sales >= 10000:
+        sales_label = f"{total_sales / 10000:.1f} 万+"
+    else:
+        sales_label = f"{total_sales:,}+"
+
+    return {
+        "total_gmv": round(total_gmv, 2),
+        "item_count": len(valid_items),
+        "avg_gmv": round(avg_gmv, 2),
+        "gmv_label": gmv_label,
+        "total_sales_estimate": total_sales,
+        "sales_label": sales_label,
+    }
+
+
+def _category_heat_score(items: list[NormalizedItem], metrics: dict[str, Any]) -> dict[str, Any]:
+    score = 0
+
+    sales = metrics.get("sales", {})
+    median_sales = sales.get("median")
+    if median_sales is not None:
+        if median_sales >= 5000:
+            score += 40
+        elif median_sales >= 1000:
+            score += 30
+        elif median_sales >= 500:
+            score += 20
+        elif median_sales >= 100:
+            score += 10
+        else:
+            score += 5
+
+    items_count = len(items)
+    if items_count >= 40:
+        score += 20
+    elif items_count >= 20:
+        score += 15
+    elif items_count >= 10:
+        score += 10
+    else:
+        score += 5
+
+    shops = metrics.get("shops", {})
+    shop_count = shops.get("unique_shop_count", 0)
+    if shop_count >= 30:
+        score += 20
+    elif shop_count >= 15:
+        score += 15
+    elif shop_count >= 5:
+        score += 10
+    else:
+        score += 5
+
+    sales_parsed = sales.get("parsed_count", 0)
+    if items_count and sales_parsed / max(items_count, 1) >= 0.6:
+        score += 10
+    elif items_count and sales_parsed / max(items_count, 1) >= 0.3:
+        score += 5
+
+    score = min(100, max(0, score))
+
+    if score >= 80:
+        level, description = "高", "市场需求旺盛"
+    elif score >= 60:
+        level, description = "中高", "市场需求较大"
+    elif score >= 40:
+        level, description = "中", "市场需求一般"
+    elif score >= 20:
+        level, description = "中低", "市场需求较小"
+    else:
+        level, description = "低", "市场需求低迷"
+
+    return {"score": score, "level": level, "description": description}
+
+
+def _top_products(items: list[NormalizedItem]) -> list[dict[str, Any]]:
+    sorted_items = sorted(
+        [item for item in items if item.sales_value is not None],
+        key=lambda x: x.sales_value,
+        reverse=True,
+    )
+    return [
+        {
+            "title": item.title,
+            "price": item.price_text,
+            "price_value": item.price_value,
+            "sales_value": item.sales_value,
+            "sales_text": item.sales_text,
+            "shop_name": item.shop_name,
+            "image_url": item.image_url,
+            "item_url": item.item_url,
+            "rank": item.rank,
+        }
+        for item in sorted_items[:10]
+    ]
+
+
+def _rank_sales_distribution(items: list[NormalizedItem]) -> list[dict[str, Any]]:
+    return [
+        {
+            "rank": item.rank,
+            "title": item.title[:30] if item.title else "",
+            "sales_value": item.sales_value,
+            "price_value": item.price_value,
+        }
+        for item in items
+        if item.sales_value is not None
+    ]
 
 
 def _counter_to_list(counter: Counter[str], limit: int) -> list[dict[str, Any]]:

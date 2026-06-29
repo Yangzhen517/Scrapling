@@ -1,257 +1,181 @@
-const form = document.getElementById("analysisForm");
-const keywordInput = document.getElementById("keyword");
-const startButton = document.getElementById("startButton");
-const statusBox = document.getElementById("status");
+/**
+ * app.js — 入口文件：事件绑定、Chrome 插件通信、Tab 路由
+ */
+(function (CI) {
+  // === DOM refs ===
+  var form = document.getElementById("analysisForm");
+  var keywordInput = document.getElementById("keyword");
+  var startButton = document.getElementById("startButton");
+  var statusBox = document.getElementById("status");
+  var tabNav = document.getElementById("tabNav");
+  var tabContent = document.getElementById("tabContent");
+  var exportBtn = document.getElementById("exportBtn");
+  var shareBtn = document.getElementById("shareBtn");
 
-const fields = {
-  itemsCount: document.getElementById("itemsCount"),
-  medianPrice: document.getElementById("medianPrice"),
-  shopCount: document.getElementById("shopCount"),
-  summarySource: document.getElementById("summarySource"),
-  reportBlocks: document.getElementById("reportBlocks"),
-  summaryBlocks: document.getElementById("summaryBlocks"),
-  priceBands: document.getElementById("priceBands"),
-  titleTerms: document.getElementById("titleTerms"),
-  topShops: document.getElementById("topShops")
-};
-let extensionTimeoutId = null;
+  // === State ===
+  var state = {
+    currentTab: "market",
+    analysisData: null,
+    extensionTimeoutId: null,
+    activeCharts: [],
+  };
 
-function logStep(event, fields = {}) {
-  console.info("[taobao-category]", event, {
-    at: new Date().toISOString(),
-    page_url: window.location.href,
-    ...fields
+  // === Tab chart initializers map ===
+  var chartInits = {
+    market: CI.renderers.marketCharts,
+    price: CI.renderers.priceCharts,
+    demand: CI.renderers.demandCharts,
+  };
+
+  // === Status helpers ===
+  function setStatus(msg, s) {
+    statusBox.textContent = msg;
+    statusBox.dataset.state = s || "idle";
+  }
+
+  function setRunning(running) {
+    startButton.disabled = running;
+    startButton.textContent = running ? "分析中…" : "开始分析";
+  }
+
+  function clearTimeout() {
+    if (state.extensionTimeoutId) {
+      window.clearTimeout(state.extensionTimeoutId);
+      state.extensionTimeoutId = null;
+    }
+  }
+
+  // === Render active tab ===
+  function renderTab(tabName) {
+    state.currentTab = tabName;
+    var R = CI.renderers;
+    var data = state.analysisData;
+    var html = "";
+
+    // Dispose all existing charts
+    state.activeCharts.forEach(function (c) { try { c.dispose(); } catch (_) {} });
+    state.activeCharts = [];
+
+    switch (tabName) {
+      case "market":     html = R.market(data); break;
+      case "price":      html = R.price(data); break;
+      case "competition": html = R.competition(data); break;
+      case "demand":     html = R.demand(data); break;
+      case "opportunities": html = R.opportunities(data); break;
+      case "products":   html = R.products(data); break;
+      default: html = '<p class="placeholder">请选择一个分析维度</p>';
+    }
+
+    tabContent.innerHTML = html;
+
+    // Initialize charts after DOM is ready
+    var initFn = chartInits[tabName];
+    if (initFn && data) {
+      requestAnimationFrame(function () {
+        initFn(data);
+        // Collect chart instances for resize/dispose
+        var doms = tabContent.querySelectorAll("[id^='chart']");
+        doms.forEach(function (dom) {
+          var inst = echarts.getInstanceByDom(dom);
+          if (inst) state.activeCharts.push(inst);
+        });
+      });
+    }
+  }
+
+  // === Render everything after analysis ===
+  function renderAll(data) {
+    state.analysisData = data;
+    CI.renderers.metricsCards(data);
+    renderTab(state.currentTab);
+  }
+
+  // === Tab navigation ===
+  tabNav.addEventListener("click", function (e) {
+    var btn = e.target.closest(".tab-btn");
+    if (!btn) return;
+    tabNav.querySelectorAll(".tab-btn").forEach(function (b) { b.classList.remove("active"); });
+    btn.classList.add("active");
+    renderTab(btn.dataset.tab);
   });
-}
 
-function setStatus(message, state = "idle") {
-  logStep("frontend.status_changed", { state, message });
-  statusBox.textContent = message;
-  statusBox.dataset.state = state;
-}
+  // === Form submit → trigger Chrome extension ===
+  form.addEventListener("submit", function (e) {
+    e.preventDefault();
+    var keyword = keywordInput.value.trim();
+    if (!keyword) {
+      setStatus("请输入关键词", "error");
+      return;
+    }
 
-function setRunning(isRunning) {
-  logStep("frontend.running_state_changed", { is_running: isRunning });
-  startButton.disabled = isRunning;
-  startButton.textContent = isRunning ? "分析中" : "开始分析";
-}
+    setRunning(true);
+    setStatus("正在请求插件打开淘宝搜索页…", "running");
+    clearTimeout();
 
-function clearExtensionTimeout() {
-  if (extensionTimeoutId) {
-    clearTimeout(extensionTimeoutId);
-    extensionTimeoutId = null;
-  }
-}
+    state.extensionTimeoutId = setTimeout(function () {
+      setRunning(false);
+      setStatus("未检测到 Chrome 插件响应。请确认已安装并启用“淘宝类目分析助手”扩展。", "error");
+    }, 15000);
 
-function sourceLabel(value) {
-  return {
-    llm: "大模型",
-    local: "本地",
-    local_fallback: "本地回退"
-  }[value] || value || "-";
-}
-
-function renderAnalysis(result) {
-  logStep("frontend.render_started", {
-    analysis_id: result.analysis_id || "",
-    items_count: result.items_count || 0,
-    summary_source: result.metrics?.summary_source || ""
+    window.postMessage(
+      { source: "taobao-category-page", type: "START_CATEGORY_ANALYSIS", keyword: keyword },
+      window.location.origin
+    );
   });
-  const metrics = result.metrics || {};
-  const price = metrics.price || {};
-  const shops = metrics.shops || {};
-  const summary = result.summary || {};
-  const report = result.report || {};
 
-  fields.itemsCount.textContent = result.items_count ?? "-";
-  fields.medianPrice.textContent = price.median == null ? "-" : `${price.median} 元`;
-  fields.shopCount.textContent = shops.unique_shop_count ?? "-";
-  fields.summarySource.textContent = sourceLabel(metrics.summary_source);
+  // === Listen for Chrome extension messages ===
+  window.addEventListener("message", function (event) {
+    if (event.source !== window || !event.data || event.data.source !== "taobao-category-extension") return;
 
-  const summaryItems = [
-    ["市场概览", summary.market_overview],
-    ["竞争强度", summary.competition],
-    ["价格机会", summary.price_opportunity],
-    ["标题/卖点建议", summary.title_suggestions],
-    ["风险提示", summary.risk_notes]
-  ];
-  fields.summaryBlocks.innerHTML = summaryItems
-    .map(([label, text]) => `<div class="summary-card"><strong>${escapeHtml(label)}</strong>${escapeHtml(text || "暂无")}</div>`)
-    .join("");
+    if (event.data.type === "CATEGORY_ANALYSIS_PROGRESS") {
+      clearTimeout();
+      setStatus(event.data.message || "分析进行中…", "running");
+    }
 
-  renderReport(report);
-  renderPriceBands(price.bands || []);
-  renderTerms(metrics.title_terms || []);
-  renderShops(shops.top_shops || []);
-  logStep("frontend.render_finished", { analysis_id: result.analysis_id || "" });
-}
+    if (event.data.type === "CATEGORY_ANALYSIS_RESULT") {
+      clearTimeout();
+      var result = event.data.result;
+      renderAll(result);
+      setStatus("分析完成 — " + keywordInput.value.trim() + " — 分析ID: " + (result.analysis_id || ""), "idle");
+      setRunning(false);
+    }
 
-function renderReport(report) {
-  const sections = [
-    report.market_snapshot,
-    report.price_structure,
-    report.competition_landscape,
-    report.demand_signals,
-    report.sales_heat
-  ].filter(Boolean);
+    if (event.data.type === "CATEGORY_ANALYSIS_ERROR") {
+      clearTimeout();
+      setStatus(event.data.message || "分析失败", "error");
+      setRunning(false);
+    }
+  });
 
-  const opportunitySection = report.opportunities_and_risks;
-  const actionSection = report.action_suggestions;
-  const blocks = sections.map(renderNarrativeSection);
-
-  if (opportunitySection) {
-    blocks.push(renderOpportunitySection(opportunitySection));
-  }
-  if (actionSection) {
-    blocks.push(renderActionSection(actionSection));
-  }
-
-  fields.reportBlocks.innerHTML = blocks.length
-    ? blocks.join("")
-    : `<p class="placeholder">暂无结构化报告</p>`;
-}
-
-function renderNarrativeSection(section) {
-  const evidence = Array.isArray(section.evidence) ? section.evidence : [];
-  return `
-    <section class="report-section">
-      <div class="report-heading">
-        <span>${escapeHtml(section.title || "报告区块")}</span>
-        <strong>${escapeHtml(section.conclusion || "暂无结论")}</strong>
-      </div>
-      ${renderList("数据依据", evidence)}
-      <p class="report-suggestion"><b>建议</b>${escapeHtml(section.suggestion || "暂无建议")}</p>
-    </section>
-  `;
-}
-
-function renderOpportunitySection(section) {
-  return `
-    <section class="report-section split-report">
-      <div>
-        <div class="report-heading compact"><span>${escapeHtml(section.title || "机会点与风险点")}</span><strong>机会点</strong></div>
-        ${renderList("", section.opportunities || [])}
-      </div>
-      <div>
-        <div class="report-heading compact"><span>风险点</span><strong>需要验证</strong></div>
-        ${renderList("", section.risks || [])}
-      </div>
-    </section>
-  `;
-}
-
-function renderActionSection(section) {
-  const actions = Array.isArray(section.actions) ? section.actions : [];
-  return `
-    <section class="report-section">
-      <div class="report-heading"><span>${escapeHtml(section.title || "运营建议")}</span><strong>下一步动作</strong></div>
-      <div class="action-grid">
-        ${actions.map((action) => `
-          <div class="action-item">
-            <strong>${escapeHtml(action.title || "建议")}</strong>
-            <p>${escapeHtml(action.detail || "")}</p>
-          </div>
-        `).join("") || `<p class="placeholder">暂无行动建议</p>`}
-      </div>
-    </section>
-  `;
-}
-
-function renderList(label, values) {
-  const items = Array.isArray(values) ? values.filter(Boolean) : [];
-  if (!items.length) {
-    return `<p class="placeholder">暂无${label || "数据"}</p>`;
-  }
-  return `
-    <div class="report-list">
-      ${label ? `<b>${escapeHtml(label)}</b>` : ""}
-      <ul>${items.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
-    </div>
-  `;
-}
-
-function renderPriceBands(bands) {
-  const max = Math.max(1, ...bands.map((band) => band.count || 0));
-  fields.priceBands.innerHTML = bands.length
-    ? bands.map((band) => {
-        const width = Math.round(((band.count || 0) / max) * 100);
-        return `<div class="bar-row"><span>${escapeHtml(band.label)}</span><div class="bar-track"><div class="bar-fill" style="width:${width}%"></div></div><b>${band.count || 0}</b></div>`;
-      }).join("")
-    : `<p class="placeholder">暂无价格带数据</p>`;
-}
-
-function renderTerms(terms) {
-  fields.titleTerms.innerHTML = terms.length
-    ? terms.slice(0, 12).map((term) => `<span class="term"><b>${escapeHtml(term.term)}</b><em>${term.count}</em></span>`).join("")
-    : `<p class="placeholder">暂无高频词</p>`;
-}
-
-function renderShops(shops) {
-  fields.topShops.innerHTML = shops.length
-    ? shops.map((shop) => `<div class="shop-row"><span>${escapeHtml(shop.term)}</span><strong>${shop.count}</strong></div>`).join("")
-    : `<p class="placeholder">暂无店铺数据</p>`;
-}
-
-function escapeHtml(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&#039;");
-}
-
-form.addEventListener("submit", (event) => {
-  event.preventDefault();
-  const keyword = keywordInput.value.trim();
-  logStep("frontend.submit_received", { keyword });
-  if (!keyword) {
-    setStatus("请输入类目名称", "error");
-    return;
-  }
-
-  setRunning(true);
-  setStatus("正在请求插件打开淘宝搜索页...", "running");
-  clearExtensionTimeout();
-  extensionTimeoutId = setTimeout(() => {
-    logStep("frontend.extension_timeout", { timeout_ms: 12000, keyword });
-    setRunning(false);
-    setStatus("未检测到 Chrome 插件响应。请确认已加载并启用“淘宝类目分析助手”。", "error");
-  }, 12000);
-  logStep("frontend.start_message_posted", { keyword });
-  window.postMessage({ source: "taobao-category-page", type: "START_CATEGORY_ANALYSIS", keyword }, window.location.origin);
-});
-
-window.addEventListener("message", (event) => {
-  if (event.source !== window || event.data?.source !== "taobao-category-extension") {
-    return;
-  }
-
-  if (event.data.type === "CATEGORY_ANALYSIS_PROGRESS") {
-    logStep("frontend.progress_received", { message: event.data.message || "" });
-    clearExtensionTimeout();
-    setStatus(event.data.message || "分析进行中...", "running");
-    return;
-  }
-
-  if (event.data.type === "CATEGORY_ANALYSIS_RESULT") {
-    logStep("frontend.result_received", {
-      analysis_id: event.data.result?.analysis_id || "",
-      items_count: event.data.result?.items_count || 0
+  // === Export / Share ===
+  if (exportBtn) {
+    exportBtn.addEventListener("click", function () {
+      window.print();
     });
-    clearExtensionTimeout();
-    renderAnalysis(event.data.result);
-    setStatus(`分析完成，分析ID：${event.data.result.analysis_id}`, "idle");
-    setRunning(false);
-    return;
   }
 
-  if (event.data.type === "CATEGORY_ANALYSIS_ERROR") {
-    logStep("frontend.error_received", { message: event.data.message || "分析失败" });
-    clearExtensionTimeout();
-    setStatus(event.data.message || "分析失败", "error");
-    setRunning(false);
+  if (shareBtn) {
+    shareBtn.addEventListener("click", function () {
+      if (navigator.clipboard) {
+        navigator.clipboard.writeText(window.location.href).then(function () {
+          shareBtn.textContent = "已复制";
+          setTimeout(function () { shareBtn.textContent = "分享报告"; }, 2000);
+        });
+      }
+    });
   }
-});
 
-setStatus("插件准备就绪后，输入类目名称即可启动分析。");
+  // === Window resize → resize ECharts ===
+  window.addEventListener("resize", function () {
+    state.activeCharts.forEach(function (c) {
+      try { c.resize(); } catch (_) {}
+    });
+    var gauge = echarts.getInstanceByDom(document.getElementById("heatGauge"));
+    if (gauge) gauge.resize();
+  });
+
+  // === Initial state ===
+  setStatus("插件就绪后，输入关键词点击“开始分析”。");
+  tabContent.innerHTML = '<p class="placeholder">完成分析后，这里将展示多维度的类目洞察报告。</p>';
+
+})(window.CategoryInsight = window.CategoryInsight || {});
