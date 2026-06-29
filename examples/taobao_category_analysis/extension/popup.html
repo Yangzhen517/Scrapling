@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <title>淘宝类目分析</title>
+    <link rel="stylesheet" href="popup.css">
+  </head>
+  <body>
+    <main>
+      <header>
+        <h1>淘宝类目分析</h1>
+        <span id="pageState">检测页面中</span>
+      </header>
+
+      <label for="apiUrl">后端接口</label>
+      <input id="apiUrl" type="url" value="http://127.0.0.1:8000/api/category-analysis">
+
+      <button id="analyzeButton" type="button" disabled>采集并分析当前页</button>
+
+      <section id="status" role="status"></section>
+      <section id="result" hidden></section>
+    </main>
+    <script src="popup.js"></script>
+  </body>
+</html>

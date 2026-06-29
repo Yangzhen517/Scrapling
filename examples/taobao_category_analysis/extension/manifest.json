@@ -1,0 +1,27 @@
+{
+  "manifest_version": 3,
+  "name": "淘宝类目分析助手",
+  "version": "0.1.0",
+  "description": "采集淘宝搜索结果第一页可见商品，并发送到后端生成类目分析。",
+  "permissions": ["activeTab", "scripting", "tabs"],
+  "host_permissions": ["*://*.taobao.com/*", "*://*.tmall.com/*", "http://127.0.0.1/*", "http://localhost/*"],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_title": "淘宝类目分析",
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["http://127.0.0.1/*", "http://localhost/*"],
+      "js": ["frontend_bridge.js"],
+      "run_at": "document_idle"
+    },
+    {
+      "matches": ["*://*.taobao.com/*", "*://*.tmall.com/*"],
+      "js": ["content.js"],
+      "run_at": "document_idle"
+    }
+  ]
+}

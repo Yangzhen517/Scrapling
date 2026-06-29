@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>AI 电商工具 - 类目分析</title>
+    <link rel="stylesheet" href="/frontend/styles.css">
+  </head>
+  <body>
+    <main class="workspace">
+      <section class="panel command-panel">
+        <div>
+          <p class="eyebrow">AI 电商工具</p>
+          <h1>类目分析</h1>
+          <p class="intro">输入类目名称，插件会打开淘宝搜索第一页，采集当前可见商品并生成市场概览。</p>
+        </div>
+        <form id="analysisForm" class="query-form">
+          <label for="keyword">类目名称</label>
+          <div class="query-row">
+            <input id="keyword" name="keyword" autocomplete="off" placeholder="例如：蓝牙耳机、通勤连衣裙、猫砂盆" required>
+            <button id="startButton" type="submit">开始分析</button>
+          </div>
+        </form>
+        <div id="status" class="status" data-state="idle">等待输入类目名称</div>
+      </section>
+
+      <section class="panel metric-grid" aria-label="核心指标">
+        <article>
+          <span>商品数量</span>
+          <strong id="itemsCount">-</strong>
+        </article>
+        <article>
+          <span>价格中位数</span>
+          <strong id="medianPrice">-</strong>
+        </article>
+        <article>
+          <span>店铺数量</span>
+          <strong id="shopCount">-</strong>
+        </article>
+        <article>
+          <span>摘要来源</span>
+          <strong id="summarySource">-</strong>
+        </article>
+      </section>
+
+      <section class="dashboard">
+        <article class="panel narrative">
+          <h2>类目分析报告</h2>
+          <div id="reportBlocks" class="report-blocks">
+            <p class="placeholder">完成分析后，这里会展示市场样本、价格结构、竞争格局、需求信号、机会风险和运营建议。</p>
+          </div>
+        </article>
+
+        <aside class="side-column">
+          <article class="panel">
+            <h2>AI 摘要</h2>
+            <div id="summaryBlocks" class="summary-blocks"></div>
+          </article>
+          <article class="panel">
+            <h2>价格带</h2>
+            <div id="priceBands" class="bars"></div>
+          </article>
+          <article class="panel">
+            <h2>高频标题词</h2>
+            <div id="titleTerms" class="terms"></div>
+          </article>
+        </aside>
+      </section>
+
+      <section class="panel table-panel">
+        <h2>头部店铺</h2>
+        <div id="topShops" class="shop-list"></div>
+      </section>
+    </main>
+    <script src="/frontend/app.js"></script>
+  </body>
+</html>
